@@ -28,7 +28,7 @@ export const ArcMode: React.FC<ArcModeProps> = ({ side }) => {
 
     return (
         <>
-            <FlightPlan y={236} mapParams={mapParams} clipPath="url(#arc-mode-flight-plan-clip)" />
+            <FlightPlan y={236} mapParams={mapParams} clipPath="url(#arc-mode-flight-plan-clip)" debug />
 
             <Overlay heading={Number(MathUtils.fastToFixed(magHeading, 1))} rangeIndex={rangeIndex} />
         </>
@@ -61,7 +61,7 @@ const Overlay: React.FC<OverlayProps> = memo(({ heading, rangeIndex }) => {
             {/* C = 384,620 */}
             <g transform="rotateX(0deg)" stroke="white" strokeWidth={3} fill="none">
                 <g clipPath="url(#arc-mode-overlay-clip-4)">
-                    <g transform={`rotate(${Avionics.Utils.diffAngle(heading, 60)} 384 620)`}>
+                    <g transform={`rotate(${MathUtils.diffAngle(heading, 60)} 384 620)`}>
                         {/* R = 492 */}
                         <path
                             d="M-108,620a492,492 0 1,0 984,0a492,492 0 1,0 -984,0"

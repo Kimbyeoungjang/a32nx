@@ -1,4 +1,5 @@
 import { Degrees, NauticalMiles } from '@typings/types';
+import { MathUtils } from '@shared/MathUtils';
 import { ControlLaw, GuidanceParameters } from './ControlLaws';
 
 export const EARTH_RADIUS_NM = 3440.1;
@@ -6,14 +7,19 @@ const mod = (x: number, n: number) => x - Math.floor(x / n) * n;
 
 export interface Guidable {
     getGuidanceParameters(ppos: LatLongAlt, trueTrack: number): GuidanceParameters | null;
-    getDistanceToGo(ppos: LatLongAlt): NauticalMiles;
+    getDistanceToGo(ppos: LatLong | LatLongAlt): NauticalMiles;
     isAbeam(ppos: LatLongAlt): boolean;
 }
 
 export abstract class Leg implements Guidable {
     abstract getGuidanceParameters(ppos, trueTrack);
 
-    abstract getDistanceToGo(ppos);
+    /**
+     * Calculates directed DTG parameter
+     *
+     * @param ppos {LatLong} the current position of the aircraft
+     */
+    abstract getDistanceToGo(ppos: LatLong): NauticalMiles;
 
     abstract isAbeam(ppos);
 }
@@ -64,23 +70,58 @@ export class TFLeg extends Leg {
         };
     }
 
-    getDistanceToGo(ppos) {
+    /**
+     * Calculates the angle between the leg and the aircraft PPOS.
+     *
+     * This effectively returns the angle ABC in the figure shown below:
+     *
+     * ```
+     * * A
+     * |
+     * * B (TO)
+     * |\
+     * | \
+     * |  \
+     * |   \
+     * |    \
+     * |     \
+     * |      \
+     * * FROM  * C (PPOS)
+     * ```
+     *
+     * @param ppos {LatLong} the current position of the aircraft
+     */
+    getAircraftToLegBearing(ppos: LatLong): number {
         const aircraftToTerminationBearing = Avionics.Utils.computeGreatCircleHeading(ppos, this.to.infos.coordinates);
 
-        let aircraftLegBearing;
-        if (aircraftToTerminationBearing < 180) {
-            aircraftLegBearing = aircraftToTerminationBearing + 180;
-        } else {
-            const bearingCompositeAngle = 360 - aircraftToTerminationBearing;
-            const bearingComplementaryAngle = 180 - bearingCompositeAngle;
-
-            aircraftLegBearing = mod((bearingComplementaryAngle + this.bearing) + 90, 360);
+        // Rotate frame of reference to 0deg
+        let correctedLegBearing = this.bearing - aircraftToTerminationBearing;
+        if (correctedLegBearing < 0) {
+            correctedLegBearing = 360 + correctedLegBearing;
         }
+
+        let aircraftToLegBearing = 180 - correctedLegBearing;
+        if (aircraftToLegBearing < 0) {
+            // if correctedLegBearing was greater than 180 degrees, then its supplementary angle is negative.
+            // In this case, we can subtract it from 360 degrees to obtain the bearing.
+
+            aircraftToLegBearing = 360 + aircraftToLegBearing;
+        }
+
+        return aircraftToLegBearing;
+    }
+
+    getDistanceToGo(ppos: LatLong): NauticalMiles {
+        const aircraftLegBearing = this.getAircraftToLegBearing(ppos);
 
         const absDtg = Avionics.Utils.computeGreatCircleDistance(ppos, this.to.infos.coordinates);
 
         // @todo should be abeam distance
         if (aircraftLegBearing >= 90 && aircraftLegBearing <= 270) {
+            // Since a line perpendicular to the leg is formed by two 90 degree angles, an aircraftLegBearing outside
+            // (North - 90) and (North + 90) is in the lower quadrants of a plane centered at the TO fix. This means
+            // the aircraft is NOT past the TO fix, and DTG must be positive.
+
             return absDtg;
         }
 
@@ -93,7 +134,7 @@ export class TFLeg extends Leg {
 
     isAbeam(ppos: LatLongAlt): boolean {
         const bearingAC = Avionics.Utils.computeGreatCircleHeading(this.from.infos.coordinates, ppos);
-        const headingAC = Math.abs(Avionics.Utils.diffAngle(this.bearing, bearingAC));
+        const headingAC = Math.abs(MathUtils.diffAngle(this.bearing, bearingAC));
         if (headingAC > 90) {
             // if we're even not abeam of the starting point
             return false;
@@ -147,7 +188,7 @@ export class Type1Transition extends Transition {
     get angle(): Degrees {
         const bearingFrom = this.previousLeg.bearing;
         const bearingTo = this.nextLeg.bearing;
-        return Math.abs(Avionics.Utils.diffAngle(bearingFrom, bearingTo));
+        return Math.abs(MathUtils.diffAngle(bearingFrom, bearingTo));
     }
 
     /**
@@ -174,7 +215,7 @@ export class Type1Transition extends Transition {
         const [inbound] = this.getTurningPoints();
 
         const bearingAC = Avionics.Utils.computeGreatCircleHeading(inbound, ppos);
-        const headingAC = Math.abs(Avionics.Utils.diffAngle(this.previousLeg.bearing, bearingAC));
+        const headingAC = Math.abs(MathUtils.diffAngle(this.previousLeg.bearing, bearingAC));
         return headingAC <= 90;
     }
 
@@ -244,7 +285,7 @@ export class Type1Transition extends Transition {
             this.clockwise ? bearingPpos + 90 : bearingPpos - 90,
             360,
         );
-        const trackAngleError = mod(desiredTrack - trueTrack, 360);
+        const trackAngleError = mod(desiredTrack - trueTrack + 180, 360) - 180;
 
         const distanceFromCenter = Avionics.Utils.computeGreatCircleDistance(
             center,
